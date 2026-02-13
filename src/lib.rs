@@ -1,5 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+pub struct MerkleTree {
+    nodes: Vec<String>,
+}
+
+impl MerkleTree {
+    pub fn new(a: Vec<&str>) -> Self {
+        let mut nodes = Vec::new();
+
+        for s in a {
+            nodes.push(s.to_string());
+        }
+        MerkleTree { nodes }
+    }
 }
 
 #[cfg(test)]
@@ -7,8 +18,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn merkle_tree_can_be_created_from_an_array() {
+        let tree = MerkleTree::new(vec!["hola", "mundo", "lambda", "class"]);
+        assert!(tree.nodes.len() == 4);
     }
 }
