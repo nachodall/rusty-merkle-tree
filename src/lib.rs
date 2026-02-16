@@ -8,13 +8,13 @@ pub enum Side {
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
-    root: String,
-    leaves: Vec<String>,
+    root: [u8; 32],
+    leaves: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MerkleProof {
-    pairs: Vec<(String, Side)>,
+    pairs: Vec<([u8; 32], Side)>,
 }
 
 impl MerkleTree {
@@ -23,10 +23,10 @@ impl MerkleTree {
             return Err("You can't create an empty Merkle Tree".to_string());
         }
 
-        let mut leaves = Vec::new();
+        let mut leaves = Vec::with_capacity(array.len());
         for element in array {
-            let leave = Self::hash_element(element);
-            leaves.push(leave);
+            let leaf = Self::hash_bytes(element.as_bytes());
+            leaves.push(leaf);
         }
 
         let root = Self::calculate_merkle_root(&leaves);
@@ -34,26 +34,26 @@ impl MerkleTree {
         Ok(MerkleTree { root, leaves })
     }
 
-    pub fn root(&self) -> &str {
-        &self.root
+    pub fn root(&self) -> [u8; 32] {
+        self.root
     }
 
     pub fn leaves_count(&self) -> usize {
         self.leaves.len()
     }
 
-    pub fn leaf_at(&self, idx: usize) -> &str {
-        &self.leaves[idx]
+    pub fn leaf_at(&self, idx: usize) -> [u8; 32] {
+        self.leaves[idx]
     }
 
     pub fn add_leaf(&mut self, element: &str) {
-        let new_hash = Self::hash_element(element);
+        let new_hash = Self::hash_bytes(element.as_bytes());
         self.leaves.push(new_hash);
         self.root = Self::calculate_merkle_root(&self.leaves);
     }
 
     pub fn formulate_proof_of_inclusion(&self, data: &str) -> Option<MerkleProof> {
-        let leaf_hash = Self::hash_element(data);
+        let leaf_hash = Self::hash_bytes(data.as_bytes());
         let index = self.leaves.iter().position(|h| h == &leaf_hash)?;
 
         let mut elements_of_proof = Vec::new();
@@ -65,9 +65,9 @@ impl MerkleTree {
     }
 
     fn formulate_proof_recursive(
-        current_level: &[String],
+        current_level: &[[u8; 32]],
         index: usize,
-        elements_of_proof: &mut Vec<(String, Side)>,
+        elements_of_proof: &mut Vec<([u8; 32], Side)>,
     ) {
         if current_level.len() <= 1 {
             return;
@@ -90,7 +90,7 @@ impl MerkleTree {
             Side::Left
         };
 
-        elements_of_proof.push((current_level[pair_idx].clone(), side));
+        elements_of_proof.push((current_level[pair_idx], side));
 
         Self::formulate_proof_recursive(
             &Self::calculate_next_level_of_tree(current_level),
@@ -99,56 +99,61 @@ impl MerkleTree {
         );
     }
 
-    fn calculate_merkle_root(leaves: &[String]) -> String {
-        let root = match leaves {
-            [] => unreachable!(""),
-            [single] => single.clone(),
-            [left, right] => {
-                let combined = format!("{}{}", left, right);
-                Self::hash_element(&combined)
-            }
+    fn calculate_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+        match leaves {
+            [] => unreachable!("Empty leaves in calculate_merkle_root"),
+            [single] => *single,
             _ => {
                 let next_level_of_tree = Self::calculate_next_level_of_tree(leaves);
                 Self::calculate_merkle_root(&next_level_of_tree)
             }
-        };
-        root
+        }
     }
 
-    fn calculate_next_level_of_tree(leaves: &[String]) -> Vec<String> {
-        let mut next_level_of_tree = Vec::new();
+    fn calculate_next_level_of_tree(leaves: &[[u8; 32]]) -> Vec<[u8; 32]> {
+        let mut next_level_of_tree = Vec::with_capacity((leaves.len() + 1) / 2);
 
         for pair in leaves.chunks(2) {
-            if pair.len() == 2 {
-                let combined = format!("{}{}", pair[0], pair[1]);
-                next_level_of_tree.push(Self::hash_element(&combined));
-            } else {
-                let combined = format!("{}{}", pair[0], pair[0]);
-                next_level_of_tree.push(Self::hash_element(&combined));
-            }
+            let left = pair[0];
+            let right = if pair.len() == 2 { pair[1] } else { pair[0] };
+
+            let mut combined = [0u8; 64];
+            combined[..32].copy_from_slice(&left);
+            combined[32..].copy_from_slice(&right);
+            next_level_of_tree.push(Self::hash_bytes(&combined));
         }
 
         next_level_of_tree
     }
 
-    pub fn hash_element(element: &str) -> String {
+    pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(element.as_bytes());
-        let res = hasher.finalize();
-        format!("{:x}", res)
+        hasher.update(data);
+        hasher.finalize().into()
+    }
+
+    pub fn root_hex(&self) -> String {
+        self.root.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
 
 impl MerkleProof {
-    pub fn verify(&self, root: &str, leaf: &str) -> bool {
-        let mut current_hash = MerkleTree::hash_element(leaf);
+    pub fn verify(&self, root: [u8; 32], leaf: &str) -> bool {
+        let mut current_hash = MerkleTree::hash_bytes(leaf.as_bytes());
 
         for (sibling_hash, side) in &self.pairs {
-            let combined = match side {
-                Side::Left => format!("{}{}", sibling_hash, current_hash),
-                Side::Right => format!("{}{}", current_hash, sibling_hash),
+            let mut combined = [0u8; 64];
+            match side {
+                Side::Left => {
+                    combined[..32].copy_from_slice(sibling_hash);
+                    combined[32..].copy_from_slice(&current_hash);
+                }
+                Side::Right => {
+                    combined[..32].copy_from_slice(&current_hash);
+                    combined[32..].copy_from_slice(sibling_hash);
+                }
             };
-            current_hash = MerkleTree::hash_element(&combined);
+            current_hash = MerkleTree::hash_bytes(&combined);
         }
 
         current_hash == root
@@ -158,6 +163,14 @@ impl MerkleProof {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hex_to_bytes(hex: &str) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        for i in 0..32 {
+            bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        bytes
+    }
 
     #[test]
     fn test_merkle_tree_can_be_created_from_a_non_empty_array() {
@@ -186,7 +199,7 @@ mod tests {
     fn test_merkle_tree_nodes_are_hashed() {
         let tree = MerkleTree::new(vec!["hola", "mundo", "lambda", "class"]).unwrap();
         let expected_hash_for_idx_0 =
-            "b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79";
+            hex_to_bytes("b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79");
 
         assert_eq!(
             tree.leaf_at(0),
@@ -202,7 +215,7 @@ mod tests {
             "b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79";
 
         assert_eq!(
-            tree.root(),
+            tree.root_hex(),
             expected_hash_for_root,
             "Root hash mismatch for a single-leaf tree"
         );
@@ -211,10 +224,10 @@ mod tests {
     #[test]
     fn test_merkle_root_of_a_tree_with_two_leaves() {
         let tree = MerkleTree::new(vec!["hola", "mundo"]).unwrap();
-        let expected_root = "960429d8385f438788551f832e4eecf94a2006393b17c6c08a9fe678acb2047e";
+        let expected_root = "c030ed83e4b337813e905c456a45c002790bc315b88ec9d47962b8563d502803";
 
         assert_eq!(
-            tree.root(),
+            tree.root_hex(),
             expected_root,
             "Root hash mismatch for a two-leaf tree"
         );
@@ -223,10 +236,10 @@ mod tests {
     #[test]
     fn test_merkle_root_of_a_tree_with_three_leaves() {
         let tree = MerkleTree::new(vec!["hola", "mundo", "lambda"]).unwrap();
-        let expected_root = "b4b392e697e6ff773514142a4be8b8f25d6faa9ab4422faeadab9483abfedaf3";
+        let expected_root = "04a9df5a1a37270eefcd5f9529d959ea89d0dd325d0787cbba98b99afa90ce60";
 
         assert_eq!(
-            tree.root(),
+            tree.root_hex(),
             expected_root,
             "Root hash mismatch for a three-leaf (unbalanced) tree"
         );
@@ -236,10 +249,10 @@ mod tests {
     fn test_merkle_root_of_a_tree_with_four_leaves() {
         let data = vec!["rust", "ethereum", "merkle", "tree"];
         let tree = MerkleTree::new(data).unwrap();
-        let expected_root = "87b80c3ccda5bfc52e736516eca761000e9ee6fd6172b92c2dae0707f7e4d367";
+        let expected_root = "904b4c3045552d5c1dd343072c64b5d59fde0b8c015aec2f96abf9cb61c6d506";
 
         assert_eq!(
-            tree.root(),
+            tree.root_hex(),
             expected_root,
             "Root hash mismatch for a four-leaf (balanced) tree"
         );
@@ -249,10 +262,10 @@ mod tests {
     fn test_merkle_root_of_a_tree_with_five_leaves() {
         let data = vec!["hola", "mundo", "lambda", "class", "rust"];
         let tree = MerkleTree::new(data).unwrap();
-        let expected_root = "7a9856ea15d79f0fc3e62da40195d3a525db3ee9f10ad9fb7b56ae325b45e14f";
+        let expected_root = "d2311a51d8b51ffe570992fb96726f0250c90b4e2fc4d37cee937cc4f253ca12";
 
         assert_eq!(
-            tree.root(),
+            tree.root_hex(),
             expected_root,
             "Root hash mismatch for a five-leaf tree"
         );
@@ -297,7 +310,7 @@ mod tests {
             .formulate_proof_of_inclusion(leaf_to_prove)
             .expect("Expected proof generation to succeed");
 
-        proof.pairs[0].0 = "fake_hash_123".to_string();
+        proof.pairs[0].0[0] ^= 0xFF;
 
         assert!(
             !proof.verify(root, leaf_to_prove),
@@ -353,7 +366,7 @@ mod tests {
     #[test]
     fn test_dynamic_tree_add_leaf_mutates_root_and_count() {
         let mut tree = MerkleTree::new(vec!["A", "B"]).unwrap();
-        let initial_root = tree.root().to_string();
+        let initial_root = tree.root();
 
         tree.add_leaf("C");
 
