@@ -25,7 +25,7 @@ impl MerkleTree {
 
         let mut leaves = Vec::with_capacity(array.len());
         for element in array {
-            let leaf = Self::hash_bytes(element.as_bytes());
+            let leaf = Self::hash_leaf(element.as_bytes());
             leaves.push(leaf);
         }
 
@@ -47,13 +47,13 @@ impl MerkleTree {
     }
 
     pub fn add_leaf(&mut self, element: &str) {
-        let new_hash = Self::hash_bytes(element.as_bytes());
+        let new_hash = Self::hash_leaf(element.as_bytes());
         self.leaves.push(new_hash);
         self.root = Self::calculate_merkle_root(&self.leaves);
     }
 
     pub fn formulate_proof_of_inclusion(&self, data: &str) -> Option<MerkleProof> {
-        let leaf_hash = Self::hash_bytes(data.as_bytes());
+        let leaf_hash = Self::hash_leaf(data.as_bytes());
         let index = self.leaves.iter().position(|h| h == &leaf_hash)?;
 
         let mut elements_of_proof = Vec::new();
@@ -74,23 +74,13 @@ impl MerkleTree {
         }
 
         let is_even_index = index % 2 == 0;
-        let pair_idx = if is_even_index {
-            if index + 1 == current_level.len() {
-                index
-            } else {
-                index + 1
+        if is_even_index {
+            if index + 1 < current_level.len() {
+                elements_of_proof.push((current_level[index + 1], Side::Right));
             }
         } else {
-            index - 1
-        };
-
-        let side = if is_even_index {
-            Side::Right
-        } else {
-            Side::Left
-        };
-
-        elements_of_proof.push((current_level[pair_idx], side));
+            elements_of_proof.push((current_level[index - 1], Side::Left));
+        }
 
         Self::formulate_proof_recursive(
             &Self::calculate_next_level_of_tree(current_level),
@@ -114,13 +104,11 @@ impl MerkleTree {
         let mut next_level_of_tree = Vec::with_capacity((leaves.len() + 1) / 2);
 
         for pair in leaves.chunks(2) {
-            let left = pair[0];
-            let right = if pair.len() == 2 { pair[1] } else { pair[0] };
-
-            let mut combined = [0u8; 64];
-            combined[..32].copy_from_slice(&left);
-            combined[32..].copy_from_slice(&right);
-            next_level_of_tree.push(Self::hash_bytes(&combined));
+            if pair.len() == 2 {
+                next_level_of_tree.push(Self::hash_internal(&pair[0], &pair[1]));
+            } else {
+                next_level_of_tree.push(pair[0]);
+            }
         }
 
         next_level_of_tree
@@ -132,6 +120,21 @@ impl MerkleTree {
         hasher.finalize().into()
     }
 
+    pub fn hash_leaf(data: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&[0x00]);
+        hasher.update(data);
+        hasher.finalize().into()
+    }
+
+    pub fn hash_internal(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&[0x01]);
+        hasher.update(left);
+        hasher.update(right);
+        hasher.finalize().into()
+    }
+
     pub fn root_hex(&self) -> String {
         self.root.iter().map(|b| format!("{:02x}", b)).collect()
     }
@@ -139,21 +142,13 @@ impl MerkleTree {
 
 impl MerkleProof {
     pub fn verify(&self, root: [u8; 32], leaf: &str) -> bool {
-        let mut current_hash = MerkleTree::hash_bytes(leaf.as_bytes());
+        let mut current_hash = MerkleTree::hash_leaf(leaf.as_bytes());
 
         for (sibling_hash, side) in &self.pairs {
-            let mut combined = [0u8; 64];
-            match side {
-                Side::Left => {
-                    combined[..32].copy_from_slice(sibling_hash);
-                    combined[32..].copy_from_slice(&current_hash);
-                }
-                Side::Right => {
-                    combined[..32].copy_from_slice(&current_hash);
-                    combined[32..].copy_from_slice(sibling_hash);
-                }
+            current_hash = match side {
+                Side::Left => MerkleTree::hash_internal(sibling_hash, &current_hash),
+                Side::Right => MerkleTree::hash_internal(&current_hash, sibling_hash),
             };
-            current_hash = MerkleTree::hash_bytes(&combined);
         }
 
         current_hash == root
@@ -199,7 +194,7 @@ mod tests {
     fn test_merkle_tree_nodes_are_hashed() {
         let tree = MerkleTree::new(vec!["hola", "mundo", "lambda", "class"]).unwrap();
         let expected_hash_for_idx_0 =
-            hex_to_bytes("b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79");
+            hex_to_bytes("8647f10af4f6c1bf806c0b8396af4dd3f737f9ff24d099bdcabc1e0edeac2f04");
 
         assert_eq!(
             tree.leaf_at(0),
@@ -212,7 +207,7 @@ mod tests {
     fn test_merkle_root_of_a_tree_of_one_leaf() {
         let tree = MerkleTree::new(vec!["hola"]).unwrap();
         let expected_hash_for_root =
-            "b221d9dbb083a7f33428d7c2a3c3198ae925614d70210e28716ccaa7cd4ddb79";
+            "8647f10af4f6c1bf806c0b8396af4dd3f737f9ff24d099bdcabc1e0edeac2f04";
 
         assert_eq!(
             tree.root_hex(),
@@ -224,7 +219,7 @@ mod tests {
     #[test]
     fn test_merkle_root_of_a_tree_with_two_leaves() {
         let tree = MerkleTree::new(vec!["hola", "mundo"]).unwrap();
-        let expected_root = "c030ed83e4b337813e905c456a45c002790bc315b88ec9d47962b8563d502803";
+        let expected_root = "25f2fee2bfa67b0f9c51fd31f9c365f3528a20c8bf198e352a59ffdc5fac6a60";
 
         assert_eq!(
             tree.root_hex(),
@@ -236,7 +231,7 @@ mod tests {
     #[test]
     fn test_merkle_root_of_a_tree_with_three_leaves() {
         let tree = MerkleTree::new(vec!["hola", "mundo", "lambda"]).unwrap();
-        let expected_root = "04a9df5a1a37270eefcd5f9529d959ea89d0dd325d0787cbba98b99afa90ce60";
+        let expected_root = "963cde18661e6f83e52f727952c41ecc25dfeb9cb623591aa0146a490cdf921b";
 
         assert_eq!(
             tree.root_hex(),
@@ -249,7 +244,7 @@ mod tests {
     fn test_merkle_root_of_a_tree_with_four_leaves() {
         let data = vec!["rust", "ethereum", "merkle", "tree"];
         let tree = MerkleTree::new(data).unwrap();
-        let expected_root = "904b4c3045552d5c1dd343072c64b5d59fde0b8c015aec2f96abf9cb61c6d506";
+        let expected_root = "ad5ac0ad8f3543dae9b63f802ffb3e5e62b45f6666ddf14c7cbd237ed4760772";
 
         assert_eq!(
             tree.root_hex(),
@@ -262,7 +257,7 @@ mod tests {
     fn test_merkle_root_of_a_tree_with_five_leaves() {
         let data = vec!["hola", "mundo", "lambda", "class", "rust"];
         let tree = MerkleTree::new(data).unwrap();
-        let expected_root = "d2311a51d8b51ffe570992fb96726f0250c90b4e2fc4d37cee937cc4f253ca12";
+        let expected_root = "c283f48b94418fdce96a4b0e79f4c1e1800c73cc2ff3fd04769810e2dee9f1dd";
 
         assert_eq!(
             tree.root_hex(),
@@ -452,5 +447,17 @@ mod tests {
                 leaf
             );
         }
+    }
+
+    #[test]
+    fn test_collision_vulnerability_duplication() {
+        let tree_3 = MerkleTree::new(vec!["A", "B", "C"]).unwrap();
+        let tree_4 = MerkleTree::new(vec!["A", "B", "C", "C"]).unwrap();
+
+        assert_ne!(
+            tree_3.root(),
+            tree_4.root(),
+            "Vulnerability found: Tree [A,B,C] and [A,B,C,C] produce the same root!"
+        );
     }
 }
