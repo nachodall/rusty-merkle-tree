@@ -73,7 +73,7 @@ impl MerkleTree {
             return;
         }
 
-        let is_even_index = index % 2 == 0;
+        let is_even_index = index.is_multiple_of(2);
         if is_even_index {
             if index + 1 < current_level.len() {
                 elements_of_proof.push((current_level[index + 1], Side::Right));
