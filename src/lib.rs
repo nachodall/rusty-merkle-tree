@@ -10,6 +10,7 @@ pub enum Side {
 pub struct MerkleTree {
     root: [u8; 32],
     leaves: Vec<[u8; 32]>,
+    nodes: Vec<Vec<[u8; 32]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,9 +30,28 @@ impl MerkleTree {
             leaves.push(leaf);
         }
 
-        let root = Self::calculate_merkle_root(&leaves);
+        let (root, nodes) = Self::build_tree(&leaves);
 
-        Ok(MerkleTree { root, leaves })
+        Ok(MerkleTree {
+            root,
+            leaves,
+            nodes,
+        })
+    }
+
+    fn build_tree(leaves: &[[u8; 32]]) -> ([u8; 32], Vec<Vec<[u8; 32]>>) {
+        if leaves.is_empty() {
+            return ([0; 32], vec![]);
+        }
+
+        let mut nodes = vec![leaves.to_vec()];
+        let mut level = 0;
+        while nodes[level].len() > 1 {
+            nodes.push(Self::calculate_next_level_of_tree(&nodes[level]));
+            level += 1;
+        }
+
+        (nodes[level][0], nodes)
     }
 
     pub fn root(&self) -> [u8; 32] {
@@ -47,61 +67,62 @@ impl MerkleTree {
     }
 
     pub fn add_leaf(&mut self, element: &str) {
-        let new_hash = Self::hash_leaf(element.as_bytes());
-        self.leaves.push(new_hash);
-        self.root = Self::calculate_merkle_root(&self.leaves);
+        let new_leaf = Self::hash_leaf(element.as_bytes());
+        self.leaves.push(new_leaf);
+
+        let mut current_hash = new_leaf;
+        let mut current_index = self.leaves.len() - 1;
+
+        for level in 0..self.nodes.len() {
+            if current_index == self.nodes[level].len() {
+                self.nodes[level].push(current_hash);
+            } else {
+                self.nodes[level][current_index] = current_hash;
+            }
+
+            if current_index % 2 == 0 {
+                current_hash = self.nodes[level][current_index];
+            } else {
+                let left = &self.nodes[level][current_index - 1];
+                let right = &self.nodes[level][current_index];
+                current_hash = Self::hash_internal(left, right);
+            }
+
+            current_index /= 2;
+        }
+
+        while self.nodes.last().unwrap().len() > 1 {
+            let last_level = self.nodes.last().unwrap();
+            self.nodes
+                .push(Self::calculate_next_level_of_tree(last_level));
+        }
+
+        self.root = self.nodes.last().unwrap()[0];
     }
 
     pub fn formulate_proof_of_inclusion(&self, data: &str) -> Option<MerkleProof> {
         let leaf_hash = Self::hash_leaf(data.as_bytes());
-        let index = self.leaves.iter().position(|h| h == &leaf_hash)?;
+        let mut index = self.leaves.iter().position(|h| h == &leaf_hash)?;
 
-        let mut elements_of_proof = Vec::new();
-        Self::formulate_proof_recursive(&self.leaves, index, &mut elements_of_proof);
+        let mut pairs = Vec::new();
 
-        Some(MerkleProof {
-            pairs: elements_of_proof,
-        })
-    }
-
-    fn formulate_proof_recursive(
-        current_level: &[[u8; 32]],
-        index: usize,
-        elements_of_proof: &mut Vec<([u8; 32], Side)>,
-    ) {
-        if current_level.len() <= 1 {
-            return;
-        }
-
-        let is_even_index = index % 2 == 0;
-        if is_even_index {
-            if index + 1 < current_level.len() {
-                elements_of_proof.push((current_level[index + 1], Side::Right));
+        for level in 0..self.nodes.len() - 1 {
+            let current_level = &self.nodes[level];
+            if index % 2 == 0 {
+                if index + 1 < current_level.len() {
+                    pairs.push((current_level[index + 1], Side::Right));
+                }
+            } else {
+                pairs.push((current_level[index - 1], Side::Left));
             }
-        } else {
-            elements_of_proof.push((current_level[index - 1], Side::Left));
+            index /= 2;
         }
 
-        Self::formulate_proof_recursive(
-            &Self::calculate_next_level_of_tree(current_level),
-            index / 2,
-            elements_of_proof,
-        );
-    }
-
-    fn calculate_merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-        match leaves {
-            [] => unreachable!("Empty leaves in calculate_merkle_root"),
-            [single] => *single,
-            _ => {
-                let next_level_of_tree = Self::calculate_next_level_of_tree(leaves);
-                Self::calculate_merkle_root(&next_level_of_tree)
-            }
-        }
+        Some(MerkleProof { pairs })
     }
 
     fn calculate_next_level_of_tree(leaves: &[[u8; 32]]) -> Vec<[u8; 32]> {
-        let mut next_level_of_tree = Vec::with_capacity((leaves.len() + 1) / 2);
+        let mut next_level_of_tree = Vec::with_capacity(leaves.len().div_ceil(2));
 
         for pair in leaves.chunks(2) {
             if pair.len() == 2 {
@@ -122,14 +143,14 @@ impl MerkleTree {
 
     pub fn hash_leaf(data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&[0x00]);
+        hasher.update([0x00]);
         hasher.update(data);
         hasher.finalize().into()
     }
 
     pub fn hash_internal(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&[0x01]);
+        hasher.update([0x01]);
         hasher.update(left);
         hasher.update(right);
         hasher.finalize().into()
