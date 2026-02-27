@@ -80,7 +80,7 @@ impl MerkleTree {
                 self.nodes[level][current_index] = current_hash;
             }
 
-            if current_index.is_multiple_of(2) {
+            if current_index % 2 == 0 {
                 current_hash = self.nodes[level][current_index];
             } else {
                 let left = &self.nodes[level][current_index - 1];
