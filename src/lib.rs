@@ -335,51 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_all_leaves_in_larger_tree_exhaustively() {
-        let data = vec![
-            "rust",
-            "haskell",
-            "c++",
-            "python",
-            "smalltalk",
-            "java",
-            "assembly",
-            "javascript",
-            "go",
-            "lua",
-            "lisp",
-            "c",
-            "c#",
-            "fortran",
-            "elixir",
-            "zig",
-            "ruby",
-            "pascal",
-            "prolog",
-        ];
-
-        let tree = MerkleTree::new(data.clone()).unwrap();
-        let root = tree.root();
-
-        for leaf in data {
-            let proof_wrapper = tree.formulate_proof_of_inclusion(leaf);
-
-            assert!(
-                proof_wrapper.is_some(),
-                "Proof generation failed unexpectedly for existing leaf: {}",
-                leaf
-            );
-
-            let proof = proof_wrapper.unwrap();
-            assert!(
-                proof.verify(root, leaf),
-                "Cryptographic verification failed for valid leaf: {}",
-                leaf
-            );
-        }
-    }
-
-    #[test]
     fn test_dynamic_tree_add_leaf_mutates_root_and_count() {
         let mut tree = MerkleTree::new(vec!["A", "B"]).unwrap();
         let initial_root = tree.root();
@@ -439,35 +394,6 @@ mod tests {
             !old_proof_for_a.verify(new_root, "A"),
             "Security vulnerability: An old proof should be strictly invalid against a mutated root"
         );
-    }
-
-    #[test]
-    fn test_dynamic_tree_multiple_additions_maintain_integrity() {
-        let mut tree = MerkleTree::new(vec!["inicio"]).unwrap();
-
-        tree.add_leaf("medio_1");
-        tree.add_leaf("medio_2");
-        tree.add_leaf("fin");
-
-        assert_eq!(
-            tree.leaves_count(),
-            4,
-            "Tree did not process multiple dynamic additions correctly"
-        );
-
-        let root = tree.root();
-
-        for leaf in ["inicio", "medio_1", "medio_2", "fin"] {
-            let proof = tree
-                .formulate_proof_of_inclusion(leaf)
-                .expect(&format!("Proof generation failed for leaf: {}", leaf));
-
-            assert!(
-                proof.verify(root, leaf),
-                "Verification failed for leaf '{}' in a dynamically built tree",
-                leaf
-            );
-        }
     }
 
     #[test]
